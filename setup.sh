@@ -174,40 +174,10 @@ else
         git clone https://github.com/intel/ipu6-drivers.git
     fi
 
-    # Fetch kernel headers that may be missing from the headers package
-    PSYS_HEADER_DIR="ipu6-drivers/drivers/media/pci/intel/ipu6"
-    KERNEL_MAJOR_MINOR="$(echo "${KERNEL_VER}" | grep -oP '^\d+\.\d+')"
-    KERNEL_TAG="v${KERNEL_MAJOR_MINOR}"
-
-    IPU6_HEADERS=(
-        ipu6.h ipu6-bus.h ipu6-buttress.h ipu6-cpd.h ipu6-dma.h
-        ipu6-fw-com.h ipu6-mmu.h ipu6-platform-buttress-regs.h
-        ipu6-platform-regs.h
-    )
-
-    HEADERS_NEEDED=false
-    for h in "${IPU6_HEADERS[@]}"; do
-        if [[ ! -f "${PSYS_HEADER_DIR}/${h}" ]]; then
-            HEADERS_NEEDED=true
-            break
-        fi
-    done
-
-    if ${HEADERS_NEEDED}; then
-        info "Fetching IPU6 kernel headers from kernel.org (${KERNEL_TAG})..."
-        for h in "${IPU6_HEADERS[@]}"; do
-            if [[ ! -f "${PSYS_HEADER_DIR}/${h}" ]]; then
-                curl -sfL "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/drivers/media/pci/intel/ipu6/${h}?h=${KERNEL_TAG}" \
-                    -o "${PSYS_HEADER_DIR}/${h}" || warn "Could not fetch ${h}"
-            fi
-        done
-
-        # Also fetch ipu6-trace.h if missing (needed by some builds)
-        if [[ ! -f "${PSYS_HEADER_DIR}/ipu6-trace.h" ]]; then
-            curl -sfL "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/drivers/media/pci/intel/ipu6/ipu6-trace.h?h=${KERNEL_TAG}" \
-                -o "${PSYS_HEADER_DIR}/ipu6-trace.h" 2>/dev/null || true
-        fi
-    fi
+    # NOTE: IPU6 kernel headers (ipu6.h, ipu6-bus.h, etc.) are provided by
+    # the ipu6-drivers repo's own patches applied during the DKMS build.
+    # Do NOT download them separately or the patches will fail with
+    # "file already exists" errors.
 
     # Install to DKMS
     DKMS_SRC="/usr/src/ipu6-drivers-${IPU6_DKMS_VER}"
