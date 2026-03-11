@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# IPU6 Camera Setup for Intel Meteor Lake (14th Gen) on Ubuntu
+# IPU6 Camera Setup for Intel Meteor Lake (14th Gen) on Arch Linux
 # ==============================================================================
 #
 # Enables the integrated camera on laptops with Intel Meteor Lake IPU6 and
@@ -26,7 +26,7 @@
 #
 # Tested on:
 #   - Lenovo ThinkPad X1 Carbon Gen 12 (Meteor Lake)
-#   - Ubuntu 24.04 LTS with HWE kernel 6.17
+#   - Arch Linux with kernel 6.17
 #   - OmniVision OV08F40 sensor (ACPI: OVTI08F4)
 #
 # ==============================================================================
@@ -57,8 +57,8 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-if ! grep -qi 'ubuntu\|debian' /etc/os-release 2>/dev/null; then
-    warn "This script is designed for Ubuntu/Debian. Other distros may need adjustments."
+if ! grep -qi 'arch' /etc/os-release 2>/dev/null; then
+    warn "This script is designed for Arch Linux. Other distros may need adjustments."
 fi
 
 # Check for IPU6 hardware
@@ -90,26 +90,25 @@ cd "${BUILD_DIR}"
 
 log "Step 1/8: Installing build dependencies..."
 
-apt-get update -qq
-apt-get install -y -qq \
-    build-essential \
+pacman -Syu --noconfirm --needed \
+    base-devel \
     cmake \
     dkms \
     git \
-    pkg-config \
-    linux-headers-"${KERNEL_VER}" \
+    pkgconf \
+    linux-headers \
     v4l2loopback-dkms \
-    libexpat1-dev \
+    expat \
     automake \
     autoconf \
     libtool \
-    libgstreamer1.0-dev \
-    libgstreamer-plugins-base1.0-dev \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-tools \
-    gir1.2-ayatanaappindicator3-0.1 \
-    python3-gi \
+    gstreamer \
+    gst-plugins-base \
+    gst-plugins-base-libs \
+    gst-plugins-good \
+    libayatana-appindicator \
+    python-gobject \
+    curl \
     > /dev/null
 
 log "Dependencies installed."
@@ -333,9 +332,6 @@ else
     # Ensure plugin is in GStreamer search path
     if [[ -f /usr/lib/gstreamer-1.0/libgsticamerasrc.so ]]; then
         log "icamerasrc plugin installed."
-    elif [[ -f /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgsticamerasrc.so ]]; then
-        cp /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgsticamerasrc.so /usr/lib/gstreamer-1.0/
-        log "icamerasrc plugin installed (copied to gstreamer-1.0/)."
     else
         warn "icamerasrc built but .so not found in expected locations."
     fi
@@ -379,32 +375,21 @@ log "Module loading and udev rules configured."
 log "Step 8/10: Configuring Firefox PipeWire camera support..."
 
 # Firefox does not use PipeWire for camera access by default.
-# This autoconfig pref enables it so Firefox Snap can use the camera
+# This autoconfig pref enables it so Firefox can use the camera
 # via the xdg-desktop-portal camera interface.
 
-# Firefox Snap autoconfig directory
-FIREFOX_SNAP_PREFS="/snap/firefox/current/usr/lib/firefox/defaults/pref"
 FIREFOX_SYSTEM_PREFS="/usr/lib/firefox/defaults/pref"
-FIREFOX_SNAP_AUTOCONFIG="/etc/firefox/syspref.js"
+FIREFOX_AUTOCONFIG="/usr/lib/firefox/defaults/pref"
 
-# Install for system Firefox (deb)
+# Install for system Firefox (pacman)
 if [[ -d "${FIREFOX_SYSTEM_PREFS}" ]]; then
     cp "${SCRIPT_DIR}/firefox-pipewire-camera.js" "${FIREFOX_SYSTEM_PREFS}/"
     info "Firefox system pref installed to ${FIREFOX_SYSTEM_PREFS}/"
-fi
-
-# Install for Firefox Snap via /etc/firefox/syspref.js (snap reads this)
-mkdir -p /etc/firefox
-if [[ -f "${FIREFOX_SNAP_AUTOCONFIG}" ]]; then
-    if ! grep -q "media.webrtc.camera.allow-pipewire" "${FIREFOX_SNAP_AUTOCONFIG}"; then
-        cat "${SCRIPT_DIR}/firefox-pipewire-camera.js" >> "${FIREFOX_SNAP_AUTOCONFIG}"
-        info "Firefox Snap pref appended to ${FIREFOX_SNAP_AUTOCONFIG}"
-    else
-        info "Firefox Snap pref already present in ${FIREFOX_SNAP_AUTOCONFIG}"
-    fi
 else
-    cp "${SCRIPT_DIR}/firefox-pipewire-camera.js" "${FIREFOX_SNAP_AUTOCONFIG}"
-    info "Firefox Snap pref installed to ${FIREFOX_SNAP_AUTOCONFIG}"
+    # Fallback: create the directory if Firefox is installed elsewhere
+    mkdir -p "${FIREFOX_AUTOCONFIG}"
+    cp "${SCRIPT_DIR}/firefox-pipewire-camera.js" "${FIREFOX_AUTOCONFIG}/"
+    info "Firefox pref installed to ${FIREFOX_AUTOCONFIG}/"
 fi
 
 log "Firefox PipeWire camera support configured."
