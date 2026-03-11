@@ -4,6 +4,10 @@
 
 set -e
 
+# Load IPU6 driver stack
+modprobe -a usbio gpio-usbio i2c-usbio intel-ipu6-psys 2>/dev/null || true
+sleep 2
+
 # Reload v4l2loopback
 modprobe -r v4l2loopback 2>/dev/null || true
 modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1

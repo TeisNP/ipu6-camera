@@ -382,13 +382,15 @@ cp "${SCRIPT_DIR}/ipu6-camera-loopback.service" /etc/systemd/system/ 2>/dev/null
 cat > /etc/systemd/system/ipu6-camera-loopback.service << 'EOF'
 [Unit]
 Description=IPU6 Integrated Camera to V4L2 Loopback
-After=multi-user.target
+After=multi-user.target systemd-modules-load.service
 Wants=multi-user.target
 
 [Service]
 Type=simple
 Environment=GST_PLUGIN_PATH=/usr/lib/gstreamer-1.0
-ExecStartPre=/sbin/modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1
+ExecStartPre=/usr/bin/modprobe -a usbio gpio-usbio i2c-usbio intel-ipu6-psys
+ExecStartPre=/usr/bin/sleep 2
+ExecStartPre=/usr/bin/modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1
 ExecStart=/usr/bin/gst-launch-1.0 -e icamerasrc buffer-count=7 ! video/x-raw,format=NV12,width=1280,height=720 ! videoconvert ! video/x-raw,format=YUY2,width=1280,height=720,framerate=30/1 ! identity drop-allocation=true ! v4l2sink device=/dev/video99 sync=false
 ExecStartPost=-/usr/local/bin/ipu6-pipewire-fixup
 Restart=on-failure
