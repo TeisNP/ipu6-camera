@@ -174,15 +174,19 @@ else
         git clone https://github.com/intel/ipu6-drivers.git
     fi
 
-    # NOTE: IPU6 kernel headers (ipu6.h, ipu6-bus.h, etc.) are provided by
-    # the ipu6-drivers repo's own patches applied during the DKMS build.
-    # Do NOT download them separately or the patches will fail with
-    # "file already exists" errors.
-
     # Install to DKMS
     DKMS_SRC="/usr/src/ipu6-drivers-${IPU6_DKMS_VER}"
     rm -rf "${DKMS_SRC}"
     cp -r ipu6-drivers "${DKMS_SRC}"
+
+    # Remove IPU6 headers that the repo ships but that its own DKMS patches
+    # try to create — otherwise patch fails with "file already exists".
+    PSYS_HEADER_DIR="${DKMS_SRC}/drivers/media/pci/intel/ipu6"
+    for h in ipu6.h ipu6-bus.h ipu6-buttress.h ipu6-cpd.h ipu6-dma.h \
+             ipu6-fw-com.h ipu6-mmu.h ipu6-platform-buttress-regs.h \
+             ipu6-platform-regs.h ipu6-trace.h; do
+        rm -f "${PSYS_HEADER_DIR}/${h}"
+    done
 
     dkms add "ipu6-drivers/${IPU6_DKMS_VER}" 2>/dev/null || true
     dkms build "ipu6-drivers/${IPU6_DKMS_VER}"
