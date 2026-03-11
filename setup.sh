@@ -190,7 +190,7 @@ else
 
     dkms add "ipu6-drivers/${IPU6_DKMS_VER}" 2>/dev/null || true
     dkms build "ipu6-drivers/${IPU6_DKMS_VER}"
-    dkms install "ipu6-drivers/${IPU6_DKMS_VER}"
+    dkms install --force "ipu6-drivers/${IPU6_DKMS_VER}"
     cd "${BUILD_DIR}"
     log "IPU6 PSYS module installed."
 fi
