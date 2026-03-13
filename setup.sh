@@ -107,6 +107,7 @@ pacman -Syu --noconfirm --needed \
     gst-plugins-base-libs \
     gst-plugins-good \
     libayatana-appindicator \
+    gnome-shell-extension-appindicator \
     python-gobject \
     curl \
     > /dev/null
@@ -391,7 +392,7 @@ Environment=GST_PLUGIN_PATH=/usr/lib/gstreamer-1.0
 ExecStartPre=/usr/bin/modprobe -a usbio gpio-usbio i2c-usbio intel-ipu6-psys
 ExecStartPre=/usr/bin/sleep 2
 ExecStartPre=/usr/bin/modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1
-ExecStart=/usr/bin/gst-launch-1.0 -e icamerasrc buffer-count=7 ! video/x-raw,format=NV12,width=1280,height=720 ! videoconvert ! video/x-raw,format=YUY2,width=1280,height=720,framerate=30/1 ! identity drop-allocation=true ! v4l2sink device=/dev/video99 sync=false
+ExecStart=/usr/bin/gst-launch-1.0 -e icamerasrc buffer-count=7 ! video/x-raw,format=NV12,width=1920,height=1080 ! videoflip method=rotate-180 ! videoconvert ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! identity drop-allocation=true ! v4l2sink device=/dev/video99 sync=false
 ExecStartPost=-/usr/local/bin/ipu6-pipewire-fixup
 Restart=on-failure
 RestartSec=5
@@ -428,6 +429,28 @@ cp "${SCRIPT_DIR}/ipu6-camera-tray.desktop" "${AUTOSTART_DIR}/"
 chown "${REAL_USER}:${REAL_USER}" "${DESKTOP_DIR}/ipu6-camera-tray.desktop" "${AUTOSTART_DIR}/ipu6-camera-tray.desktop"
 
 update-desktop-database "${DESKTOP_DIR}" 2>/dev/null || true
+
+# Enable the GNOME AppIndicator extension so the tray icon is visible
+if [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]] || command -v gnome-shell &>/dev/null; then
+    REAL_UID=$(id -u "${REAL_USER}")
+    DBUS_ADDR="unix:path=/run/user/${REAL_UID}/bus"
+    CURRENT=$(sudo -u "${REAL_USER}" DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
+        gsettings get org.gnome.shell enabled-extensions 2>/dev/null || echo "@as []")
+    if ! echo "${CURRENT}" | grep -q "appindicatorsupport@rgcjonas.gmail.com"; then
+        # Append to the existing enabled-extensions list
+        if [[ "${CURRENT}" == "@as []" ]]; then
+            NEW_VAL="['appindicatorsupport@rgcjonas.gmail.com']"
+        else
+            NEW_VAL="${CURRENT%]*}, 'appindicatorsupport@rgcjonas.gmail.com']"
+        fi
+        sudo -u "${REAL_USER}" DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
+            gsettings set org.gnome.shell enabled-extensions "${NEW_VAL}" 2>/dev/null \
+            && info "GNOME AppIndicator extension enabled." \
+            || warn "Could not enable GNOME AppIndicator extension. Enable it manually in GNOME Extensions."
+    else
+        info "GNOME AppIndicator extension already enabled."
+    fi
+fi
 
 log "Tray utility installed. It will auto-start on login."
 
