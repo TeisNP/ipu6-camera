@@ -29,6 +29,13 @@
 
 set -u
 
+# --pre: setup-only mode for the on-demand watcher.  Creates the PipeWire
+# node and grants portal permissions WITHOUT waiting for a producer.
+PRE_MODE=false
+if [ "${1:-}" = "--pre" ]; then
+    PRE_MODE=true
+fi
+
 VIDEO_DEV="/dev/video99"
 NODE_NAME="ipu6-camera"
 NODE_DESC="Integrated-Camera"
@@ -52,8 +59,10 @@ run_as_user() {
 # ---------------------------------------------------------------------------
 # Wait for the GStreamer pipeline to start writing frames
 # ---------------------------------------------------------------------------
-echo "[ipu6-pipewire-fixup] Waiting for v4l2loopback producer..."
-sleep 5
+if ! $PRE_MODE; then
+    echo "[ipu6-pipewire-fixup] Waiting for v4l2loopback producer..."
+    sleep 5
+fi
 
 if [ ! -e "$VIDEO_DEV" ]; then
     echo "[ipu6-pipewire-fixup] $VIDEO_DEV not found, aborting"
@@ -63,13 +72,26 @@ fi
 # ---------------------------------------------------------------------------
 # Step 1: Create PipeWire V4L2 SPA node
 # ---------------------------------------------------------------------------
-echo "[ipu6-pipewire-fixup] Creating PipeWire V4L2 SPA node for $VIDEO_DEV..."
 
-# Check if node already exists
+# Check if node already exists (e.g. from --pre setup by the watcher)
 EXISTING=$(run_as_user "pw-cli list-objects 2>/dev/null | grep -c '$NODE_NAME'" || true)
+
 if [ "${EXISTING:-0}" -gt 0 ]; then
-    echo "[ipu6-pipewire-fixup] Node '$NODE_NAME' already exists, skipping creation"
+    echo "[ipu6-pipewire-fixup] Node '$NODE_NAME' already exists"
+
+    # If we're running as ExecStartPost (not --pre) and the node + portal are
+    # already set up (watcher did --pre), there's nothing to do.  Exit fast to
+    # avoid a 7-second stall in 'activating' state and an xdg-desktop-portal
+    # restart that would kill the active camera session.
+    if ! $PRE_MODE; then
+        IS_PRESENT=$(run_as_user "busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Camera IsCameraPresent 2>/dev/null" || true)
+        if echo "$IS_PRESENT" | grep -q "true"; then
+            echo "[ipu6-pipewire-fixup] Portal already sees camera, skipping (on-demand path)"
+            exit 0
+        fi
+    fi
 else
+    echo "[ipu6-pipewire-fixup] Creating PipeWire V4L2 SPA node for $VIDEO_DEV..."
     run_as_user "pw-cli create-node spa-node-factory '{ factory.name=api.v4l2.source node.name=$NODE_NAME node.description=$NODE_DESC api.v4l2.path=$VIDEO_DEV media.class=Video/Source object.linger=true }'" \
         && echo "[ipu6-pipewire-fixup] PipeWire V4L2 node created" \
         || echo "[ipu6-pipewire-fixup] WARNING: Failed to create PipeWire node"

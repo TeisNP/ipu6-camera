@@ -1,0 +1,157 @@
+#!/bin/bash
+# ==============================================================================
+# IPU6 Camera On-Demand Watcher
+# ==============================================================================
+#
+# Monitors /dev/video99 for application access and automatically starts/stops
+# the ipu6-camera-loopback pipeline on demand.
+#
+# How it works:
+#
+#   1. Loads v4l2loopback so /dev/video99 exists and apps can enumerate it.
+#   2. Pre-loads IPU6 driver modules so the pipeline starts quickly.
+#   3. Registers a PipeWire node + portal permissions (via ipu6-pipewire-fixup
+#      --pre) so apps going through the XDG camera portal (Teams, Firefox,
+#      Chrome, etc.) can discover the camera.
+#   4. Watches /dev/video99 with inotifywait for OPEN events.  When PipeWire
+#      (or any app) opens the device, the watcher starts the camera pipeline.
+#   5. After the pipeline starts, polls with fuser to detect idle — when all
+#      consumers release the device for IDLE_TIMEOUT seconds, stops the
+#      pipeline and goes back to watching.
+#
+# Falls back to fuser-based polling if inotifywait is not available.
+#
+# Dependencies: inotify-tools (recommended), psmisc (fuser)
+#
+# Usage:  Runs as a systemd service (ipu6-camera-watcher.service).
+#
+# ==============================================================================
+
+set -u
+
+SERVICE="ipu6-camera-loopback"
+DEVICE="/dev/video99"
+POLL_INTERVAL=2
+IDLE_TIMEOUT=15   # seconds with no consumers before stopping
+
+# ── Load modules and create loopback device ──────────────────────────────────
+
+# Pre-load the IPU6 driver stack so pipeline starts are fast
+modprobe -a usbio gpio-usbio i2c-usbio intel-ipu6-psys 2>/dev/null || true
+
+# Load v4l2loopback so the device exists for app discovery
+modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1 2>/dev/null || true
+
+for _i in $(seq 1 10); do
+    [ -e "$DEVICE" ] && break
+    sleep 1
+done
+
+if [ ! -e "$DEVICE" ]; then
+    echo "ERROR: $DEVICE did not appear" >&2
+    exit 1
+fi
+
+# ── Register PipeWire node + portal permissions ──────────────────────────────
+# This makes the camera visible to PipeWire-based apps (Teams, browsers)
+# BEFORE the pipeline is running.  PipeWire will open /dev/video99 when an
+# app requests the camera, which we detect and use to start the pipeline.
+
+setup_pipewire_node() {
+    if [ -x /usr/local/bin/ipu6-pipewire-fixup ]; then
+        /usr/local/bin/ipu6-pipewire-fixup --pre || true
+    fi
+}
+
+# Wait for a graphical session before touching PipeWire
+for _i in $(seq 1 60); do
+    loginctl list-sessions --no-legend | grep -q seat0 && break
+    sleep 2
+done
+setup_pipewire_node
+
+echo "Watching $DEVICE for consumer access (idle=${IDLE_TIMEOUT}s)"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+get_service_pids() {
+    local main_pid
+    main_pid=$(systemctl show -p MainPID --value "$SERVICE" 2>/dev/null)
+    if [ -n "$main_pid" ] && [ "$main_pid" != "0" ]; then
+        echo "$main_pid"
+        pgrep -P "$main_pid" 2>/dev/null || true
+    fi
+}
+
+# Return 0 if a non-pipeline process has the device open.
+has_consumers() {
+    local device_pids service_pids pid spid is_service
+    device_pids=$(fuser "$DEVICE" 2>/dev/null) || return 1
+    service_pids=$(get_service_pids)
+
+    for pid in $device_pids; do
+        is_service=false
+        for spid in $service_pids; do
+            [ "$pid" = "$spid" ] && { is_service=true; break; }
+        done
+        $is_service || return 0
+    done
+    return 1
+}
+
+wait_for_access() {
+    if command -v inotifywait &>/dev/null; then
+        # inotifywait blocks until the device is opened by any process
+        inotifywait -qq -e open "$DEVICE"
+    else
+        echo "WARNING: inotifywait not found; falling back to fuser polling (install inotify-tools for faster detection)"
+        while ! has_consumers; do
+            sleep "$POLL_INTERVAL"
+        done
+    fi
+}
+
+# ── Main loop ────────────────────────────────────────────────────────────────
+
+while true; do
+    # --- Waiting mode: camera off, wait for an app to open the device ---
+    wait_for_access
+
+    # Skip if the service is already running (e.g. manual start)
+    if systemctl is-active --quiet "$SERVICE"; then
+        sleep "$POLL_INTERVAL"
+        continue
+    fi
+
+    echo "Access detected on $DEVICE — starting $SERVICE"
+    systemctl start "$SERVICE" &
+
+    # Give the pipeline time to start before polling for idle
+    sleep 5
+
+    # --- Active mode: camera on, detect idle ---
+    idle_seconds=0
+    while true; do
+        sleep "$POLL_INTERVAL"
+        if has_consumers; then
+            idle_seconds=0
+        else
+            if systemctl is-active --quiet "$SERVICE"; then
+                idle_seconds=$((idle_seconds + POLL_INTERVAL))
+                if [ "$idle_seconds" -ge "$IDLE_TIMEOUT" ]; then
+                    echo "No consumers for ${IDLE_TIMEOUT}s — stopping $SERVICE"
+                    systemctl stop "$SERVICE"
+                    idle_seconds=0
+                    # Re-ensure loopback device after service stop
+                    modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1 2>/dev/null || true
+                    # Re-register PipeWire node (user session may have restarted)
+                    setup_pipewire_node
+                    break
+                fi
+            else
+                # Service stopped externally (manual stop / crash)
+                break
+            fi
+        fi
+    done
+done

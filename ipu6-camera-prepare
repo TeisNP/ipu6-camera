@@ -1,0 +1,41 @@
+#!/bin/bash
+# Prepare IPU6 camera hardware — fast path when already initialized.
+# Called by ipu6-camera-loopback.service ExecStartPre.
+
+set -e
+
+# Fast path: sensor already probed
+if [ -e /dev/v4l-subdev0 ]; then
+    modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1
+    exit 0
+fi
+
+# Load driver stack (no-op if already loaded)
+modprobe -a usbio gpio-usbio i2c-usbio intel-ipu6-psys 2>/dev/null || true
+
+# Load CVS power controller for Arrow Lake platforms (powers on the sensor)
+modprobe intel_cvs 2>/dev/null || true
+
+# Wait briefly for ISYS if not yet ready
+if ! grep -rql "Intel IPU6 ISYS" /sys/class/video4linux/*/name 2>/dev/null; then
+    udevadm settle --timeout=10 2>/dev/null || true
+fi
+
+# If the sensor driver isn't even loaded, load it
+if ! lsmod | grep -q ov02c10; then
+    modprobe ov02c10
+fi
+
+# Wait for sensor with a 20s timeout (INT3472 may need time to set up GPIOs)
+for i in $(seq 1 20); do
+    [ -e /dev/v4l-subdev0 ] && break
+    sleep 1
+done
+
+if [ ! -e /dev/v4l-subdev0 ]; then
+    echo "ERROR: Camera sensor failed to probe. Reboot may be needed." >&2
+    exit 1
+fi
+
+# Ensure v4l2loopback is loaded
+modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1

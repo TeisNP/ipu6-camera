@@ -25,10 +25,16 @@ gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import Gtk, GLib, AyatanaAppIndicator3
 
 SERVICE = "ipu6-camera-loopback"
+WATCHER_SERVICE = "ipu6-camera-watcher"
 SERVICE_FILE = f"/etc/systemd/system/{SERVICE}.service"
 ICON_ON = "camera-video"
 ICON_OFF = "camera-video-symbolic"
 LOCK_PATH = "/tmp/ipu6-camera-tray.lock"
+
+# Startup modes
+MODE_MANUAL = 0
+MODE_ON_DEMAND = 1
+MODE_ALWAYS_ON = 2
 
 
 def run(cmd):
@@ -45,6 +51,19 @@ def is_active():
 def is_enabled():
     rc, _ = run(["systemctl", "is-enabled", "--quiet", SERVICE])
     return rc == 0
+
+
+def is_watcher_enabled():
+    rc, _ = run(["systemctl", "is-enabled", "--quiet", WATCHER_SERVICE])
+    return rc == 0
+
+
+def get_startup_mode():
+    if is_enabled():
+        return MODE_ALWAYS_ON
+    if is_watcher_enabled():
+        return MODE_ON_DEMAND
+    return MODE_MANUAL
 
 
 def get_current_resolution():
@@ -116,7 +135,6 @@ class CameraTray:
 
     def _on_settings(self, _):
         current_res = get_current_resolution()
-        autostart = is_enabled()
 
         dialog = Gtk.Dialog(
             title="IPU6 Camera Settings",
@@ -136,45 +154,47 @@ class CameraTray:
         box.set_margin_top(12)
         box.set_margin_bottom(8)
 
-        # Resolution
-        res_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        res_box.pack_start(Gtk.Label(label="Resolution:"), False, False, 0)
-        res_combo = Gtk.ComboBoxText()
-        res_combo.append_text("720p (1280\u00d7720)")
-        res_combo.append_text("1080p (1920\u00d71080)")
-        res_combo.set_active(1 if current_res == "1080p" else 0)
-        res_box.pack_start(res_combo, True, True, 0)
-        box.pack_start(res_box, False, False, 0)
-
-        # Auto-start
-        auto_check = Gtk.CheckButton(label="Auto-start on boot")
-        auto_check.set_active(autostart)
-        box.pack_start(auto_check, False, False, 0)
+        # Startup mode
+        mode_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        mode_box.pack_start(Gtk.Label(label="Startup:"), False, False, 0)
+        mode_combo = Gtk.ComboBoxText()
+        mode_combo.append_text("Manual")
+        mode_combo.append_text("On-demand (auto-detect)")
+        mode_combo.append_text("Always on")
+        mode_combo.set_active(get_startup_mode())
+        mode_box.pack_start(mode_combo, True, True, 0)
+        box.pack_start(mode_box, False, False, 0)
 
         dialog.show_all()
         response = dialog.run()
 
         if response == Gtk.ResponseType.OK:
-            new_res = "1080p" if res_combo.get_active() == 1 else "720p"
-            new_autostart = auto_check.get_active()
+            new_mode = mode_combo.get_active()
+            old_mode = get_startup_mode()
+            if new_mode != old_mode:
+                cmds = []
+                # Disable old mode (without stopping running services)
+                if old_mode == MODE_ALWAYS_ON:
+                    cmds.append(f"systemctl disable {SERVICE}")
+                elif old_mode == MODE_ON_DEMAND:
+                    # Only disable, don't --now stop — the watcher may be
+                    # managing an active pipeline right now
+                    cmds.append(f"systemctl disable {WATCHER_SERVICE}")
 
-            if new_res != current_res:
-                w, h = ("1920", "1080") if new_res == "1080p" else ("1280", "720")
-                sed_cmd = f"s/width=[0-9]\\+,height=[0-9]\\+/width={w},height={h}/g"
-                subprocess.run([
-                    "pkexec", "bash", "-c",
-                    f"sed -i '{sed_cmd}' '{SERVICE_FILE}' && systemctl daemon-reload"
-                ])
-                if is_active():
-                    subprocess.Popen(["pkexec", "systemctl", "restart", SERVICE])
-                self._notify(f"Resolution changed to {w}\u00d7{h}.")
+                # Enable new mode (without force-starting if already running)
+                if new_mode == MODE_ALWAYS_ON:
+                    cmds.append(f"systemctl enable {SERVICE}")
+                    if not is_active():
+                        cmds.append(f"systemctl start {SERVICE}")
+                elif new_mode == MODE_ON_DEMAND:
+                    cmds.append(f"systemctl enable {WATCHER_SERVICE}")
+                    cmds.append(f"systemctl start {WATCHER_SERVICE}")
 
-            if new_autostart and not autostart:
-                subprocess.run(["pkexec", "systemctl", "enable", SERVICE])
-                self._notify("Auto-start enabled.")
-            elif not new_autostart and autostart:
-                subprocess.run(["pkexec", "systemctl", "disable", SERVICE])
-                self._notify("Auto-start disabled.")
+                if cmds:
+                    subprocess.run(["pkexec", "bash", "-c", "; ".join(cmds)])
+
+                labels = ["Manual", "On-demand", "Always on"]
+                self._notify(f"Startup mode: {labels[new_mode]}")
 
             GLib.timeout_add(2000, self._update_icon)
 
@@ -186,8 +206,13 @@ class CameraTray:
         _, svc = run(["systemctl", "is-active", SERVICE])
         lines.append(f"Service:     {svc}")
 
-        _, enb = run(["systemctl", "is-enabled", SERVICE])
-        lines.append(f"Auto-start:  {enb}")
+        mode = get_startup_mode()
+        mode_labels = {MODE_MANUAL: "manual", MODE_ON_DEMAND: "on-demand", MODE_ALWAYS_ON: "always on"}
+        lines.append(f"Startup:     {mode_labels[mode]}")
+
+        if mode == MODE_ON_DEMAND:
+            _, watcher = run(["systemctl", "is-active", WATCHER_SERVICE])
+            lines.append(f"Watcher:     {watcher}")
 
         lines.append(f"Resolution:  {get_current_resolution()}")
         lines.append("")

@@ -109,6 +109,7 @@ pacman -Syu --noconfirm --needed \
     libayatana-appindicator \
     gnome-shell-extension-appindicator \
     python-gobject \
+    inotify-tools \
     curl \
     > /dev/null
 
@@ -373,38 +374,31 @@ log "Firefox PipeWire camera support configured."
 # Step 9: Install systemd service
 # ==============================================================================
 
-log "Step 9/10: Installing systemd service..."
+log "Step 9/10: Installing systemd services..."
+
+# Install helper scripts
+cp "${SCRIPT_DIR}/ipu6-camera-prepare" /usr/local/bin/ipu6-camera-prepare
+chmod +x /usr/local/bin/ipu6-camera-prepare
+
+cp "${SCRIPT_DIR}/ipu6-camera-watcher" /usr/local/bin/ipu6-camera-watcher
+chmod +x /usr/local/bin/ipu6-camera-watcher
 
 # Install PipeWire fixup script (restarts WirePlumber so Firefox detects the camera)
 cp "${SCRIPT_DIR}/ipu6-pipewire-fixup" /usr/local/bin/ipu6-pipewire-fixup
 chmod +x /usr/local/bin/ipu6-pipewire-fixup
 
-cp "${SCRIPT_DIR}/ipu6-camera-loopback.service" /etc/systemd/system/ 2>/dev/null || \
-cat > /etc/systemd/system/ipu6-camera-loopback.service << 'EOF'
-[Unit]
-Description=IPU6 Integrated Camera to V4L2 Loopback
-After=multi-user.target systemd-modules-load.service
-Wants=multi-user.target
-
-[Service]
-Type=simple
-Environment=GST_PLUGIN_PATH=/usr/lib/gstreamer-1.0
-ExecStartPre=/usr/bin/modprobe -a usbio gpio-usbio i2c-usbio intel-ipu6-psys
-ExecStartPre=/usr/bin/sleep 2
-ExecStartPre=/usr/bin/modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1
-ExecStart=/usr/bin/gst-launch-1.0 -e icamerasrc buffer-count=7 ! video/x-raw,format=NV12,width=1920,height=1080 ! videoflip method=rotate-180 ! videoconvert ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! identity drop-allocation=true ! v4l2sink device=/dev/video99 sync=false
-ExecStartPost=-/usr/local/bin/ipu6-pipewire-fixup
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# Install service units
+cp "${SCRIPT_DIR}/ipu6-camera-loopback.service" /etc/systemd/system/
+cp "${SCRIPT_DIR}/ipu6-camera-watcher.service" /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable ipu6-camera-loopback.service
 
-log "Systemd service installed and enabled."
+# Default to on-demand mode: the watcher monitors /dev/video99 and starts
+# the camera pipeline automatically when an application requests access.
+systemctl disable ipu6-camera-loopback.service 2>/dev/null || true
+systemctl enable ipu6-camera-watcher.service
+
+log "Systemd services installed (on-demand mode enabled)."
 
 # ==============================================================================
 # Step 10: Install tray toggle utility
@@ -465,9 +459,14 @@ echo "=============================================="
 echo ""
 echo "Next steps:"
 echo "  1. Reboot your machine"
-echo "  2. The camera will start automatically as 'Integrated Camera' on /dev/video99"
+echo "  2. The camera starts automatically when an application requests access"
 echo "  3. Use the IPU6 Camera tray icon to toggle camera on/off and adjust settings"
 echo "  4. Test at https://webcamtests.com in any browser (Firefox, Chrome, Brave, Edge)"
+echo ""
+echo "Startup modes (configurable in tray settings):"
+echo "  On-demand (default) — camera starts when an app opens /dev/video99"
+echo "  Always on           — camera runs continuously from boot"
+echo "  Manual              — start/stop via tray icon or systemctl"
 echo ""
 echo "Manual start (without reboot):"
 echo "  sudo modprobe usbio gpio-usbio i2c-usbio intel-ipu6-psys"

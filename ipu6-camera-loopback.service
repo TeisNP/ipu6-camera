@@ -1,22 +1,20 @@
 [Unit]
 Description=IPU6 Integrated Camera to V4L2 Loopback
-After=multi-user.target systemd-modules-load.service
+After=multi-user.target
 Wants=multi-user.target
+StartLimitBurst=5
+StartLimitIntervalSec=120
 
 [Service]
 Type=simple
 Environment=GST_PLUGIN_PATH=/usr/lib/gstreamer-1.0
 Environment=CAMHAL_PROFILE_DIR=/etc/camera/ipu6epmtl
-ExecStartPre=/usr/bin/modprobe -a usbio gpio-usbio i2c-usbio intel-ipu6-psys
-ExecStartPre=/usr/bin/sleep 3
-ExecStartPre=/usr/bin/udevadm settle --timeout=30
-ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do grep -rql "Intel IPU6 ISYS" /sys/class/video4linux/*/name 2>/dev/null && break; sleep 1; done'
-ExecStartPre=/bin/bash -c 'if [ ! -e /dev/v4l-subdev0 ]; then modprobe -r ov02c10 2>/dev/null; sleep 1; modprobe ov02c10; sleep 3; fi'
-ExecStartPre=/usr/bin/modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1
+ExecStartPre=/usr/local/bin/ipu6-camera-prepare
 ExecStart=/usr/bin/gst-launch-1.0 -e icamerasrc buffer-count=7 ! video/x-raw,format=NV12,width=1920,height=1080 ! videoflip method=rotate-180 ! videoconvert ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! identity drop-allocation=true ! v4l2sink device=/dev/video99 sync=false
 ExecStartPost=-/usr/local/bin/ipu6-pipewire-fixup
+TimeoutStartSec=60
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

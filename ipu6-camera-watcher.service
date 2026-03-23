@@ -1,0 +1,13 @@
+[Unit]
+Description=IPU6 Camera On-Demand Watcher
+After=multi-user.target systemd-modules-load.service
+Wants=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ipu6-camera-watcher
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
