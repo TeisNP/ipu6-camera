@@ -5,7 +5,7 @@
 set -e
 
 # Fast path: sensor already probed
-if [ -e /dev/v4l-subdev0 ]; then
+if grep -rql "ov02c10" /sys/class/video4linux/v4l-subdev*/name 2>/dev/null; then
     modprobe v4l2loopback video_nr=99 card_label="Integrated Camera" exclusive_caps=1
     exit 0
 fi
@@ -21,18 +21,19 @@ if ! grep -rql "Intel IPU6 ISYS" /sys/class/video4linux/*/name 2>/dev/null; then
     udevadm settle --timeout=10 2>/dev/null || true
 fi
 
-# If the sensor driver isn't even loaded, load it
-if ! lsmod | grep -q ov02c10; then
-    modprobe ov02c10
+# Reload sensor driver to trigger reprobe (handles boot-time CVS power sequencing race)
+if lsmod | grep -q ov02c10; then
+    modprobe -r ov02c10
 fi
+modprobe ov02c10
 
 # Wait for sensor with a 20s timeout (INT3472 may need time to set up GPIOs)
 for i in $(seq 1 20); do
-    [ -e /dev/v4l-subdev0 ] && break
+    grep -rql "ov02c10" /sys/class/video4linux/v4l-subdev*/name 2>/dev/null && break
     sleep 1
 done
 
-if [ ! -e /dev/v4l-subdev0 ]; then
+if ! grep -rql "ov02c10" /sys/class/video4linux/v4l-subdev*/name 2>/dev/null; then
     echo "ERROR: Camera sensor failed to probe. Reboot may be needed." >&2
     exit 1
 fi
